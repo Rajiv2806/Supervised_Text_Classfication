@@ -1,0 +1,151 @@
+---
+title: "Training a machine to classify tweets according to sentiment"
+author: " Rajiv V "
+date: "17 December 2016"
+output: html_document
+---
+
+
+## 
+The aim of this exercise is to Train a machine to classify tweets according to sentiment. In order to accomplish this task we have extracted tweets from twitter based on the following six tags
+#Amma, #IPL, #RIO, #GST, #NarendraModi,#demonitization
+
+We have collected 500 tweets for each of these tags and then put them together to create a corpus of 3000 tweets, after cleaning the data and removing duplicates(retweets etc.,) we got about 1059 tweets in our final corpus.We have classified these 1058 tweets manually by reading each tweet if they reflected positive or negative or neutral sentiment, by giving a value of +1 for positive sentiment, 0 for neutral and -1 for negative sentiment. 
+
+Here we are using the TM and RTextTools package for classifying the text.
+
+Of the 1059 tweets in our final corpus, 70%  we have used, to train the model and remaining 30% to test the model.
+
+Published at : http://rpubs.com/rajiv2806/Training_a_machine_to_classify_tweets_according_to_sentiment
+
+## Invoking libraries
+```{r lib, message=FALSE, warning=FALSE}
+library("tm")
+library("RTextTools")
+library('magrittr')
+```
+
+## Read the training data set in R and assign column names
+
+```{r Read data}
+library(RCurl)
+data = read.csv(text = getURL("https://raw.githubusercontent.com/Rajiv2806/Supervised_Text_Classfication/master/Tweets%20traindata.txt"),sep = '\t',stringsAsFactors = F)
+dim(data)
+colnames(data) <- c('sentiment','text')                    # Rename variables
+head(data)                                                 # View few rows
+head(data[which(data$sentiment < 1),])                     # View few rows with negative sentiment
+
+```
+
+## Split this data in two parts for evaluating models
+```{r split data}
+samp_id = sample(1:nrow(data),              
+                 round(nrow(data)*.70),     # 70% records will be used for training
+                 replace = F)               # sampling without replacement.
+
+train = data[samp_id,]                      # 70% of training data set, examine struc of samp_id obj
+test = data[-samp_id,]                      # remaining 30% of training data set
+
+dim(test) ; dim(train)                      # dimns of test n training 
+head(test)
+head(train)
+```
+
+## Process the text data and create DTM (Document Term Matrix)
+```{r process data}
+train.data = rbind(train,test)              # join the data sets
+train.data$text = tolower(train.data$text)  # Convert to lower case
+
+text = train.data$text                      
+text = removePunctuation(text)              # remove punctuation marks
+text = removeNumbers(text)                  # remove numbers
+text = stripWhitespace(text)                # remove blank space
+cor = Corpus(VectorSource(text))            # Create text corpus
+dtm = DocumentTermMatrix(cor,               # Craete DTM
+                         control = list(weighting =             
+                                               function(x)
+                                                 weightTfIdf(x, normalize = F))) # IDF weighing
+
+training_codes = train.data$sentiment       # Coded labels
+dim(dtm)
+
+```
+
+## Test the models and choose the best model
+
+ we have tested with various models as listed below
+ MAXENT,SVM,GLMNET,SLDA,TREE,BAGGING,BOOSTING,RF
+ and found that we are getting maximum accuracy of 63% with MAXENT
+```{r test models}
+container <- create_container(dtm,               # creates a 'container' obj for training, classifying, and analyzing docs
+                              t(training_codes), # labels or the Y variable / outcome we want to train on
+                              trainSize = 1:nrow(train), 
+                              testSize = (nrow(train)+1):nrow(train.data), 
+                              virgin = FALSE)      # whether to treat the classification data as 'virgin' data or not.
+                                                   # if virgin = TRUE, then machine won;t borrow from prior datasets.
+str(container)     # view struc of the container obj; is a list of training n test data
+
+models <- train_models(container,              # ?train_models; makes a model object using the specified algorithms.
+                       algorithms=c("MAXENT")) #"MAXENT","SVM","GLMNET","SLDA","TREE","BAGGING","BOOSTING","RF"
+
+results <- classify_models(container, models)
+
+head(results)
+```
+## Building a confusion matrix to see accuracy of prediction results
+```{r confusion matrix}
+out = data.frame(model_sentiment = results$MAXENTROPY_LABEL,    # rounded probability == model's prediction of Y
+                 model_prob = results$MAXENTROPY_PROB,
+                 actual_sentiment = train.data$sentiment[(nrow(train)+1):nrow(train.data)])  # actual value of Y
+
+dim(out); head(out); 
+summary(out)           # how many 0s and 1s were there anyway?
+
+(z = as.matrix(table(out[,1], out[,3])))   # display the confusion matrix.
+(pct = round(((z[1,1] + z[2,2])/sum(z))*100, 2))      # prediction accuracy in % terms
+head(out,10)
+
+
+```
+##
+From the confusing matrix we can see that 75% of neutral tweets, 60% of postive tweets and 50% of negative tweets  were predicted accurately by the model.
+##Processing the training data and test data together
+```{r}
+data.test = read.csv(text = getURL("https://raw.githubusercontent.com/Rajiv2806/Supervised_Text_Classfication/master/Tweets%20testdata.txt"),sep = '\t',stringsAsFactors = F)
+
+dim(data.test)
+colnames(data.test) = 'text'
+
+set.seed(16122016)
+data.test1 = data.test[sample(1:nrow(data.test), 1617, replace = T),] # randomly Selecting only 1000 rows for demo purpose
+
+dtm.test = DocumentTermMatrix(cor, control = list(weighting = 
+                                                  function(x)
+                                                    weightTfIdf(x, normalize = F)))
+
+row.names(dtm.test) = (nrow(dtm)+1):(nrow(dtm)+nrow(dtm.test))     # row naming for doc ID
+dtm.f = c(dtm, dtm.test)    # concatenating the dtms
+training_codes.f = c(training_codes, 
+                     rep(NA, length(data.test1)))     # replace unknown Y values with NA
+```
+
+
+
+##Predict the test data
+```{r Predict test data}
+container.f = create_container(dtm.f,      # build a new container; all same as before
+                               t(training_codes.f), trainSize=1:nrow(dtm), 
+                               testSize = (nrow(dtm)+1):(nrow(dtm)+nrow(dtm.test)), virgin = T)
+
+model.f = train_models(container.f, algorithms = c("MAXENT")) 
+
+predicted <- classify_models(container.f, model.f)     # classify_models makes predictions from a train_models() object.
+
+out = data.frame(model_sentiment = predicted$MAXENTROPY_LABEL,    # again, building a confusion matrix
+                 model_prob = predicted$MAXENTROPY_PROB,
+                 text = data.test1)
+dim(out)
+
+head(out,10)
+```
+## We see that the Predicted Sentiment is quite in agreement with the actual sentiment in good number of cases. the same can be witnessed by looking at above output
